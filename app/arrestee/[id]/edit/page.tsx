@@ -15,6 +15,7 @@ const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 type Arrestee = {
   id: string;
+  _id?: string;
   nameEn: string;
   nameNp: string;
   age: number;
@@ -29,7 +30,31 @@ type Arrestee = {
 
 type ArresteeResponse = {
   data?: Arrestee;
+  arrestee?: Arrestee;
 };
+
+function normalizeArrestee(payload: unknown): Arrestee | null {
+  if (!payload || typeof payload !== "object") return null;
+
+  const record = payload as Partial<Arrestee>;
+  const resolvedId = record.id ?? record._id;
+  if (!resolvedId) return null;
+
+  return {
+    ...record,
+    id: resolvedId,
+    nameEn: record.nameEn ?? "",
+    nameNp: record.nameNp ?? "",
+    age: typeof record.age === "number" ? record.age : Number(record.age ?? 0),
+    postEn: record.postEn ?? "",
+    postNp: record.postNp ?? "",
+    causeEn: record.causeEn ?? "",
+    causeNp: record.causeNp ?? "",
+    detailsEn: Array.isArray(record.detailsEn) ? record.detailsEn : [],
+    detailsNp: Array.isArray(record.detailsNp) ? record.detailsNp : [],
+    profileImgUrl: record.profileImgUrl,
+  };
+}
 
 export default function EditArresteePage() {
   const { lang } = useLanguage();
@@ -42,14 +67,21 @@ export default function EditArresteePage() {
   const fieldClass = "ui-input";
   const textareaClass = `${fieldClass} ui-textarea`;
 
-  const arresteeQuery = useQuery<ArresteeResponse>({
+  const arresteeQuery = useQuery<Arrestee | null>({
     queryKey: ["arrestee", arresteeId],
     queryFn: async () => {
       const res = await fetcher(`${API_BASE}/arrestee/${arresteeId}`, {
         method: "GET",
       });
       await throwApiError(res, "Failed to load arrestee");
-      return (await res.json()) as ArresteeResponse;
+
+      const json = (await res.json()) as ArresteeResponse | Arrestee;
+      const candidate =
+        (json as ArresteeResponse).data ??
+        (json as ArresteeResponse).arrestee ??
+        json;
+
+      return normalizeArrestee(candidate);
     },
     enabled: Boolean(arresteeId),
     gcTime: 5 * 60 * 1000,
@@ -140,7 +172,7 @@ export default function EditArresteePage() {
     updateMutation.mutate(formData);
   };
 
-  const arresteeData = arresteeQuery.data?.data;
+  const arresteeData = arresteeQuery.data;
 
   return (
     <CanManage>
