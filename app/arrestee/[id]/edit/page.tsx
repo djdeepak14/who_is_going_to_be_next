@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useAuth } from "@clerk/nextjs";
 
 import { useLanguage } from "@/app/context/LanguageContext";
 import { fetcher, getApiBaseUrl, getErrorMessage, throwApiError } from "@/app/lib/api-client";
@@ -60,6 +61,7 @@ export default function EditArresteePage() {
   const { lang } = useLanguage();
   const { showToast } = useToast();
   const router = useRouter();
+  const { getToken } = useAuth();
   const params = useParams<{ id: string }>();
   const arresteeId = params?.id;
 
@@ -72,7 +74,7 @@ export default function EditArresteePage() {
     queryFn: async () => {
       const res = await fetcher(`${API_BASE}/arrestee/${arresteeId}`, {
         method: "GET",
-      });
+      }, getToken);
       await throwApiError(res, "Failed to load arrestee");
 
       const json = (await res.json()) as ArresteeResponse | Arrestee;
@@ -93,7 +95,7 @@ export default function EditArresteePage() {
       const res = await fetcher(`${API_BASE}/arrestee/${arresteeId}`, {
         method: "PATCH",
         body: formData,
-      });
+      }, getToken);
 
       await throwApiError(res, "Failed to update arrestee");
       return res.json().catch(() => null);
