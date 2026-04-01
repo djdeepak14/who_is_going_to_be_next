@@ -65,13 +65,12 @@ export default function PollDetailPage() {
   const [editingOptionNp, setEditingOptionNp] = useState("");
   const [editingOptionEn, setEditingOptionEn] = useState("");
   const [editingOptionImage, setEditingOptionImage] = useState<File | null>(null);
-  const [localSelectedOptionId, setLocalSelectedOptionId] = useState<string | null>(() => {
-    if (typeof window === "undefined" || !pollId) return null;
+  const [localUserVotes, setLocalUserVotes] = useState<Record<string, string>>(() => {
+    if (typeof window === "undefined") return {};
     try {
-      const history = JSON.parse(localStorage.getItem(POLL_USER_VOTE_STORAGE_KEY) || "{}") as Record<string, string>;
-      return history[pollId] || null;
+      return JSON.parse(localStorage.getItem(POLL_USER_VOTE_STORAGE_KEY) || "{}") as Record<string, string>;
     } catch {
-      return null;
+      return {};
     }
   });
 
@@ -101,7 +100,12 @@ export default function PollDetailPage() {
       return (await res.json()) as VoteResponse;
     },
     onMutate: (optionId) => {
-      setLocalSelectedOptionId(optionId);
+      if (pollId) {
+        setLocalUserVotes((prev) => ({
+          ...prev,
+          [pollId]: optionId,
+        }));
+      }
       if (pollId) {
         try {
           const history = JSON.parse(localStorage.getItem(POLL_USER_VOTE_STORAGE_KEY) || "{}") as Record<string, string>;
@@ -364,7 +368,7 @@ export default function PollDetailPage() {
 
   const { poll } = pollData;
   const total = poll.options.reduce((acc: number, o: PollOption) => acc + o.voteCount, 0);
-  const selectedOptionId = pollData.userVote?.optionId || localSelectedOptionId;
+  const selectedOptionId = pollData.userVote?.optionId || localUserVotes[pollId];
 
   return (
     <div className="page-wrap max-w-4xl mx-auto py-12 content-fade-in">
