@@ -63,6 +63,7 @@ export default function PollDetailPage() {
   const [editingOptionNp, setEditingOptionNp] = useState("");
   const [editingOptionEn, setEditingOptionEn] = useState("");
   const [editingOptionImage, setEditingOptionImage] = useState<File | null>(null);
+  const [localSelectedOptionId, setLocalSelectedOptionId] = useState<string | null>(null);
 
   const { data: pollData, isLoading, isError, error } = useQuery<PollDetailResponse>({
     queryKey: ["poll", id],
@@ -88,6 +89,9 @@ export default function PollDetailPage() {
       });
       await throwApiError(res, "Could not submit vote");
       return (await res.json()) as VoteResponse;
+    },
+    onMutate: (optionId) => {
+      setLocalSelectedOptionId(optionId);
     },
     onSuccess: (payload) => {
       queryClient.invalidateQueries({ queryKey: ["poll", id] });
@@ -328,7 +332,7 @@ export default function PollDetailPage() {
 
   const { poll } = pollData;
   const total = poll.options.reduce((acc: number, o: PollOption) => acc + o.voteCount, 0);
-  const selectedOptionId = pollData.userVote?.optionId;
+  const selectedOptionId = pollData.userVote?.optionId || localSelectedOptionId;
 
   return (
     <div className="page-wrap max-w-4xl mx-auto py-12 content-fade-in">

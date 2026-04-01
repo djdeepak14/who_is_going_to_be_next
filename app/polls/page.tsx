@@ -97,6 +97,7 @@ export default function PollsPage() {
   const { lang } = useLanguage();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
+  const [localUserVotes, setLocalUserVotes] = useState<Record<string, string>>({});
   // Store new option state per poll
   const [newOptionState, setNewOptionState] = useState<Record<string, { np: string; en: string; show: boolean; image: File | null }>>({});
 
@@ -162,7 +163,11 @@ export default function PollsPage() {
       await throwApiError(res, "Failed to cast vote");
       return (await res.json()) as VoteResponse;
     },
-    onSuccess: (payload) => {
+    onSuccess: (payload, variables) => {
+      setLocalUserVotes((prev) => ({
+        ...prev,
+        [variables.pollId]: variables.optionId,
+      }));
       queryClient.invalidateQueries({ queryKey: ["polls"] });
       const fallbackTitle =
         payload?.data?.action === "updated"
@@ -218,7 +223,7 @@ export default function PollsPage() {
                 key={poll.id}
                 poll={poll}
                 lang={lang}
-                votedOptionId={poll.userVote?.optionId}
+                votedOptionId={poll.userVote?.optionId || localUserVotes[poll.id]}
                 votingDisabled={voteMutation.isPending}
                 deletingPoll={deletePollMutation.isPending}
                 deletingOption={deleteOptionMutation.isPending}
