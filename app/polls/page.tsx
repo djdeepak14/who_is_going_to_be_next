@@ -15,10 +15,26 @@ import { PollsListSkeleton } from "@/app/components/PageSkeletons";
 
 const API_BASE = getApiBaseUrl();
 const POLL_API = `${API_BASE}/poll`;
-const POLL_VOTE_KEY = "vanguard_poll_history";
 
-type PollOption = { id: string; optionTextNp: string; optionTextEn: string; voteCount: number };
-type Poll = { id: string; titleNp: string; titleEn: string; options: PollOption[]; createdBy?: string };
+type PollOption = {
+  id: string;
+  optionTextNp: string;
+  optionTextEn: string;
+  voteCount: number;
+  optionImage?: string | null;
+  optionImageUrl?: string | null;
+  image?: string | null;
+};
+type Poll = {
+  id: string;
+  titleNp: string;
+  titleEn: string;
+  options: PollOption[];
+  createdBy?: string;
+  userVote?: {
+    optionId?: string;
+  };
+};
 type PollResponse = { data?: Poll[] };
 
 type PollCardProps = {
@@ -29,15 +45,27 @@ type PollCardProps = {
   deletingPoll: boolean;
   deletingOption: boolean;
   addingOption: boolean;
-  pollState: { np: string; en: string; show: boolean };
+  pollState: { np: string; en: string; show: boolean; image: File | null };
   onVote: (pollId: string, optionId: string) => void;
   onDeletePoll: (pollId: string) => void;
   onDeleteOption: (optionId: string) => void;
   onToggleAddOption: (show: boolean) => void;
   onChangeOptionNp: (value: string) => void;
   onChangeOptionEn: (value: string) => void;
-  onAddOption: (pollId: string, optionTextNp: string, optionTextEn: string) => void;
+  onChangeOptionImage: (file: File | null) => void;
+  onAddOption: (pollId: string, optionTextNp: string, optionTextEn: string, image: File | null) => void;
 };
+
+type VoteResponse = {
+  message?: string;
+  data?: {
+    action?: "created" | "updated" | "unchanged";
+  };
+};
+
+function getOptionImageSrc(option: PollOption): string | null {
+  return option.optionImageUrl || option.optionImage || option.image || null;
+}
 
 export default function PollsPage() {
   const { getToken } = useAuth();
@@ -69,12 +97,8 @@ export default function PollsPage() {
   const { lang } = useLanguage();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
-  const [votedPolls, setVotedPolls] = useState<Record<string, string>>(() => {
-    if (typeof window === "undefined") return {};
-    return JSON.parse(localStorage.getItem(POLL_VOTE_KEY) || "{}");
-  });
   // Store new option state per poll
-  const [newOptionState, setNewOptionState] = useState<Record<string, { np: string; en: string; show: boolean }>>({});
+  const [newOptionState, setNewOptionState] = useState<Record<string, { np: string; en: string; show: boolean; image: File | null }>>({});
 
   const deleteOptionMutation = useMutation({
     mutationFn: async (optionId: string) => {
@@ -104,11 +128,17 @@ export default function PollsPage() {
   });
 
   const addOptionMutation = useMutation({
-    mutationFn: async ({ pollId, optionTextNp, optionTextEn }: { pollId: string; optionTextNp: string; optionTextEn: string }) => {
+    mutationFn: async ({ pollId, optionTextNp, optionTextEn, image }: { pollId: string; optionTextNp: string; optionTextEn: string; image: File | null }) => {
+      const formData = new FormData();
+      formData.append("optionTextNp", optionTextNp);
+      formData.append("optionTextEn", optionTextEn);
+      if (image) {
+        formData.append("optionImage", image);
+      }
+
       const res = await fetcher(`${POLL_API}/${pollId}/options`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ optionTextNp, optionTextEn }),
+        body: formData,
       }, getToken);
       await throwApiError(res, "Failed to add option");
       return res.json();
@@ -130,13 +160,23 @@ export default function PollsPage() {
         body: JSON.stringify({ pollId, optionId }),
       });
       await throwApiError(res, "Failed to cast vote");
-      return res.json();
+      return (await res.json()) as VoteResponse;
     },
-    onSuccess: (_, vars) => {
-      const next = { ...votedPolls, [vars.pollId]: vars.optionId };
-      setVotedPolls(next);
-      localStorage.setItem(POLL_VOTE_KEY, JSON.stringify(next));
+    onSuccess: (payload) => {
       queryClient.invalidateQueries({ queryKey: ["polls"] });
+      const fallbackTitle =
+        payload?.data?.action === "updated"
+          ? lang === "Np"
+            ? "मत परिवर्तन भयो"
+            : "Vote updated"
+          : payload?.data?.action === "unchanged"
+            ? lang === "Np"
+              ? "उही विकल्प पहिले नै चयन गरिएको छ"
+              : "Option already selected"
+            : lang === "Np"
+              ? "मत दर्ता भयो"
+              : "Vote submitted";
+      showToast({ type: "success", title: payload?.message || fallbackTitle });
     },
     onError: (error) => {
       showToast({ type: "error", title: getErrorMessage(error, lang === "Np" ? "मत दिन सकिएन" : "Could not submit vote") });
@@ -167,8 +207,8 @@ export default function PollsPage() {
         {/* ── Poll list ── */}
         <section className="lg:col-span-8 space-y-6">
           {polls.map((poll) => {
-            const pollState = newOptionState[poll.id] || { np: "", en: "", show: false };
-            const setPollState = (update: Partial<{ np: string; en: string; show: boolean }>) =>
+            const pollState = newOptionState[poll.id] || { np: "", en: "", show: false, image: null };
+            const setPollState = (update: Partial<{ np: string; en: string; show: boolean; image: File | null }>) =>
               setNewOptionState((prev) => ({
                 ...prev,
                 [poll.id]: { ...pollState, ...update },
@@ -178,27 +218,14 @@ export default function PollsPage() {
                 key={poll.id}
                 poll={poll}
                 lang={lang}
-                votedOptionId={votedPolls[poll.id]}
+                votedOptionId={poll.userVote?.optionId}
                 votingDisabled={voteMutation.isPending}
                 deletingPoll={deletePollMutation.isPending}
                 deletingOption={deleteOptionMutation.isPending}
                 addingOption={addOptionMutation.isPending}
                 pollState={pollState}
                 onVote={(pollId, optionId) => {
-                  const wasFirstVote = !votedPolls[pollId];
-                  voteMutation.mutate(
-                    { pollId, optionId },
-                    {
-                      onSuccess: () => {
-                        showToast({
-                          type: "success",
-                          title: wasFirstVote
-                            ? lang === "Np" ? "मत दर्ता भयो" : "Vote submitted"
-                            : lang === "Np" ? "मत परिवर्तन भयो" : "Vote updated",
-                        });
-                      },
-                    },
-                  );
+                  voteMutation.mutate({ pollId, optionId });
                 }}
                 onDeletePoll={(pollId) => {
                   if (deletePollMutation.isPending) return;
@@ -215,10 +242,11 @@ export default function PollsPage() {
                 onToggleAddOption={(show) => setPollState({ show })}
                 onChangeOptionNp={(value) => setPollState({ np: value })}
                 onChangeOptionEn={(value) => setPollState({ en: value })}
-                onAddOption={(pollId, optionTextNp, optionTextEn) => {
+                onChangeOptionImage={(file) => setPollState({ image: file })}
+                onAddOption={(pollId, optionTextNp, optionTextEn, image) => {
                   addOptionMutation.mutate(
-                    { pollId, optionTextNp: optionTextNp.trim(), optionTextEn: optionTextEn.trim() },
-                    { onSuccess: () => setPollState({ np: "", en: "", show: false }) },
+                    { pollId, optionTextNp: optionTextNp.trim(), optionTextEn: optionTextEn.trim(), image },
+                    { onSuccess: () => setPollState({ np: "", en: "", show: false, image: null }) },
                   );
                 }}
               />
@@ -272,6 +300,7 @@ function PollCard({
   onToggleAddOption,
   onChangeOptionNp,
   onChangeOptionEn,
+  onChangeOptionImage,
   onAddOption,
 }: PollCardProps) {
   const totalVotes = poll.options.reduce((sum, o) => sum + o.voteCount, 0);
@@ -285,11 +314,6 @@ function PollCard({
           <h2 className="font-headline text-xl font-bold text-on-surface leading-snug">
             {lang === "Np" ? poll.titleNp : poll.titleEn}
           </h2>
-          {poll.createdBy && (
-            <p className="mt-1 text-xs ui-text-muted">
-              {lang === "Np" ? `सिर्जनाकर्ता: ${poll.createdBy}` : `by ${poll.createdBy}`}
-            </p>
-          )}
         </div>
 
         <span className="shrink-0 mt-0.5 text-[11px] font-semibold tracking-wide text-on-surface-variant border border-outline-variant rounded-full px-2.5 py-0.5 whitespace-nowrap">
@@ -317,6 +341,7 @@ function PollCard({
         {poll.options.map((option) => {
           const pct = getPct(option.voteCount);
           const isSelected = votedOptionId === option.id;
+          const imageSrc = getOptionImageSrc(option);
           return (
             <div
               key={option.id}
@@ -338,9 +363,15 @@ function PollCard({
               />
 
               <div className="relative z-10 flex items-center justify-between gap-2 p-3">
-                <span className={`text-sm font-semibold truncate ${isSelected ? "text-on-primary" : "text-on-surface"}`}>
-                  {lang === "Np" ? option.optionTextNp : option.optionTextEn}
-                </span>
+                <div className="flex items-center gap-2 min-w-0">
+                  {imageSrc && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={imageSrc} alt={lang === "Np" ? option.optionTextNp : option.optionTextEn} className="h-8 w-8 rounded object-cover" />
+                  )}
+                  <span className={`text-sm font-semibold truncate ${isSelected ? "text-on-primary" : "text-on-surface"}`}>
+                    {lang === "Np" ? option.optionTextNp : option.optionTextEn}
+                  </span>
+                </div>
 
                 <div className="flex items-center gap-2 shrink-0">
                   {hasVoted && (
@@ -385,7 +416,7 @@ function PollCard({
             onSubmit={(e) => {
               e.preventDefault();
               if (!pollState.np.trim() && !pollState.en.trim()) return;
-              onAddOption(poll.id, pollState.np, pollState.en);
+                onAddOption(poll.id, pollState.np, pollState.en, pollState.image);
             }}
           >
             <input
@@ -400,6 +431,13 @@ function PollCard({
               placeholder="Option (English)"
               value={pollState.en}
               onChange={(e) => onChangeOptionEn(e.target.value)}
+              disabled={addingOption}
+            />
+            <input
+              type="file"
+              accept="image/*"
+              className="ui-input flex-1"
+              onChange={(e) => onChangeOptionImage(e.target.files?.[0] || null)}
               disabled={addingOption}
             />
             <button

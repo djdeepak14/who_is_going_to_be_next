@@ -18,6 +18,7 @@ const MIN_OPTIONS = 2;
 type PollOptionDraft = {
   optionTextNp: string;
   optionTextEn: string;
+  image: File | null;
 };
 
 export default function CreatePollPage() {
@@ -32,39 +33,48 @@ export default function CreatePollPage() {
   const [descriptionNp, setDescriptionNp] = useState("");
   const [descriptionEn, setDescriptionEn] = useState("");
   const [options, setOptions] = useState<PollOptionDraft[]>([
-    { optionTextNp: "", optionTextEn: "" },
-    { optionTextNp: "", optionTextEn: "" },
+    { optionTextNp: "", optionTextEn: "", image: null },
+    { optionTextNp: "", optionTextEn: "", image: null },
   ]);
 
   const createPollMutation = useMutation({
     mutationFn: async () => {
-      const payload = {
-        titleEn: titleEn.trim(),
-        titleNp: titleNp.trim(),
-        descriptionEn: descriptionEn.trim() || undefined,
-        descriptionNp: descriptionNp.trim() || undefined,
-        options: options.map((option) => ({
-          optionTextEn: option.optionTextEn.trim(),
-          optionTextNp: option.optionTextNp.trim(),
-        })),
-      };
+      const formData = new FormData();
+      formData.append("titleEn", titleEn.trim());
+      formData.append("titleNp", titleNp.trim());
+
+      if (descriptionEn.trim()) {
+        formData.append("descriptionEn", descriptionEn.trim());
+      }
+      if (descriptionNp.trim()) {
+        formData.append("descriptionNp", descriptionNp.trim());
+      }
+
+      const optionPayload = options.map((option) => ({
+        optionTextEn: option.optionTextEn.trim(),
+        optionTextNp: option.optionTextNp.trim(),
+      }));
+      formData.append("options", JSON.stringify(optionPayload));
+
+      options.forEach((option, index) => {
+        if (option.image) {
+          formData.append(`optionImage_${index}`, option.image);
+        }
+      });
 
       const res = await fetcher(POLL_API, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
+        body: formData,
       }, getToken);
 
       await throwApiError(res, "Failed to create poll");
 
-      return res.json().catch(() => null);
+      return res.json().catch(() => null) as Promise<{ message?: string } | null>;
     },
-    onSuccess: () => {
+    onSuccess: (payload) => {
       showToast({
         type: "success",
-        title: lang === "Np" ? "पोल सफलतापूर्वक सिर्जना भयो" : "Poll created successfully",
+        title: payload?.message || (lang === "Np" ? "पोल सफलतापूर्वक सिर्जना भयो" : "Poll created successfully"),
       });
       router.push("/polls");
     },
@@ -83,7 +93,11 @@ export default function CreatePollPage() {
 
   const addOption = () => {
     if (options.length >= MAX_OPTIONS) return;
-    setOptions((prev) => [...prev, { optionTextNp: "", optionTextEn: "" }]);
+    setOptions((prev) => [...prev, { optionTextNp: "", optionTextEn: "", image: null }]);
+  };
+
+  const setOptionImage = (index: number, file: File | null) => {
+    setOptions((prev) => prev.map((opt, i) => (i === index ? { ...opt, image: file } : opt)));
   };
 
   const removeOption = (index: number) => {
@@ -240,6 +254,12 @@ export default function CreatePollPage() {
                     placeholder="Option text (English)"
                     className="ui-input"
                     required
+                  />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="ui-input md:col-span-2"
+                    onChange={(e) => setOptionImage(index, e.target.files?.[0] || null)}
                   />
                 </div>
               </div>

@@ -13,13 +13,15 @@ import { PollDetailSkeleton } from "@/app/components/PageSkeletons";
 
 const API_BASE = getApiBaseUrl();
 const POLL_API = `${API_BASE}/poll`;
-const POLL_VOTE_KEY = "vanguard_poll_history";
 
 type PollOption = {
   id: string;
   optionTextNp: string;
   optionTextEn: string;
   voteCount: number;
+  optionImage?: string | null;
+  optionImageUrl?: string | null;
+  image?: string | null;
 };
 
 type PollDetail = {
@@ -31,7 +33,21 @@ type PollDetail = {
 
 type PollDetailResponse = {
   poll: PollDetail;
+  userVote?: {
+    optionId?: string;
+  };
 };
+
+type VoteResponse = {
+  message?: string;
+  data?: {
+    action?: "created" | "updated" | "unchanged";
+  };
+};
+
+function getOptionImageSrc(option: PollOption): string | null {
+  return option.optionImageUrl || option.optionImage || option.image || null;
+}
 
 export default function PollDetailPage() {
   const { id } = useParams();
@@ -40,12 +56,13 @@ export default function PollDetailPage() {
   const { lang } = useLanguage();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
-  const [votedPolls, setVotedPolls] = useState<Record<string, string>>(() => {
-    if (typeof window === "undefined") return {};
-    return JSON.parse(localStorage.getItem(POLL_VOTE_KEY) || "{}");
-  });
   const [newOptionNp, setNewOptionNp] = useState("");
   const [newOptionEn, setNewOptionEn] = useState("");
+  const [newOptionImage, setNewOptionImage] = useState<File | null>(null);
+  const [editingOptionId, setEditingOptionId] = useState<string | null>(null);
+  const [editingOptionNp, setEditingOptionNp] = useState("");
+  const [editingOptionEn, setEditingOptionEn] = useState("");
+  const [editingOptionImage, setEditingOptionImage] = useState<File | null>(null);
 
   const { data: pollData, isLoading, isError, error } = useQuery<PollDetailResponse>({
     queryKey: ["poll", id],
@@ -70,16 +87,28 @@ export default function PollDetailPage() {
         body: JSON.stringify({ pollId: id, optionId }),
       });
       await throwApiError(res, "Could not submit vote");
-      return res.json();
+      return (await res.json()) as VoteResponse;
     },
-    onSuccess: (_, optionId) => {
-      const nextHistory = { ...votedPolls, [id as string]: optionId };
-      setVotedPolls(nextHistory);
-      localStorage.setItem(POLL_VOTE_KEY, JSON.stringify(nextHistory));
+    onSuccess: (payload) => {
       queryClient.invalidateQueries({ queryKey: ["poll", id] });
+      queryClient.invalidateQueries({ queryKey: ["polls"] });
+
+      const fallbackTitle =
+        payload?.data?.action === "updated"
+          ? lang === "Np"
+            ? "मत परिवर्तन भयो"
+            : "Vote updated"
+          : payload?.data?.action === "unchanged"
+            ? lang === "Np"
+              ? "उही विकल्प पहिले नै चयन गरिएको छ"
+              : "Option already selected"
+            : lang === "Np"
+              ? "मत दर्ता भयो"
+              : "Vote submitted";
+
       showToast({
         type: "success",
-        title: lang === "Np" ? "मत दर्ता भयो" : "Vote submitted",
+        title: payload?.message || fallbackTitle,
       });
     },
     onError: (error) => {
@@ -120,33 +149,78 @@ export default function PollDetailPage() {
 
   const addOptionMutation = useMutation({
     mutationFn: async () => {
+      const formData = new FormData();
+      formData.append("optionTextNp", newOptionNp.trim());
+      formData.append("optionTextEn", newOptionEn.trim());
+      if (newOptionImage) {
+        formData.append("optionImage", newOptionImage);
+      }
+
       const res = await fetcher(`${POLL_API}/${id}/options`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          optionTextNp: newOptionNp.trim(),
-          optionTextEn: newOptionEn.trim(),
-        }),
+        body: formData,
       }, getToken);
 
       await throwApiError(res, "Failed to add option");
 
-      return res.json().catch(() => null);
+      return res.json().catch(() => null) as Promise<{ message?: string } | null>;
     },
-    onSuccess: () => {
+    onSuccess: (payload) => {
       setNewOptionNp("");
       setNewOptionEn("");
+      setNewOptionImage(null);
       queryClient.invalidateQueries({ queryKey: ["poll", id] });
       queryClient.invalidateQueries({ queryKey: ["polls"] });
       showToast({
         type: "success",
-        title: lang === "Np" ? "विकल्प थपियो" : "Option added",
+        title: payload?.message || (lang === "Np" ? "विकल्प थपियो" : "Option added"),
       });
     },
     onError: (error) => {
       const fallback = lang === "Np" ? "विकल्प थप्न सकिएन" : "Could not add option";
+      showToast({
+        type: "error",
+        title: getErrorMessage(error, fallback),
+      });
+    },
+  });
+
+  const updateOptionMutation = useMutation({
+    mutationFn: async (optionId: string) => {
+      const formData = new FormData();
+      if (editingOptionNp.trim()) {
+        formData.append("optionTextNp", editingOptionNp.trim());
+      }
+      if (editingOptionEn.trim()) {
+        formData.append("optionTextEn", editingOptionEn.trim());
+      }
+      if (editingOptionImage) {
+        formData.append("optionImage", editingOptionImage);
+      }
+
+      const res = await fetcher(`${POLL_API}/options/${optionId}`, {
+        method: "PATCH",
+        body: formData,
+      }, getToken);
+
+      await throwApiError(res, "Failed to update option");
+
+      return res.json().catch(() => null) as Promise<{ message?: string } | null>;
+    },
+    onSuccess: (payload) => {
+      setEditingOptionId(null);
+      setEditingOptionNp("");
+      setEditingOptionEn("");
+      setEditingOptionImage(null);
+      queryClient.invalidateQueries({ queryKey: ["poll", id] });
+      queryClient.invalidateQueries({ queryKey: ["polls"] });
+      showToast({
+        type: "success",
+        title: payload?.message || (lang === "Np" ? "विकल्प परिमार्जन भयो" : "Option updated"),
+      });
+    },
+    onError: (error) => {
+      const fallback = lang === "Np" ? "विकल्प परिमार्जन गर्न सकिएन" : "Could not update option";
       showToast({
         type: "error",
         title: getErrorMessage(error, fallback),
@@ -216,6 +290,25 @@ export default function PollDetailPage() {
     deleteOptionMutation.mutate(optionId);
   };
 
+  const handleEditOption = (option: PollOption) => {
+    setEditingOptionId(option.id);
+    setEditingOptionNp(option.optionTextNp);
+    setEditingOptionEn(option.optionTextEn);
+    setEditingOptionImage(null);
+  };
+
+  const handleSaveOption = () => {
+    if (!editingOptionId) return;
+    if (!editingOptionNp.trim() && !editingOptionEn.trim() && !editingOptionImage) {
+      showToast({
+        type: "error",
+        title: lang === "Np" ? "कम्तिमा एक परिवर्तन आवश्यक छ" : "At least one change is required",
+      });
+      return;
+    }
+    updateOptionMutation.mutate(editingOptionId);
+  };
+
   if (isLoading) {
     return <PollDetailSkeleton />;
   }
@@ -235,6 +328,7 @@ export default function PollDetailPage() {
 
   const { poll } = pollData;
   const total = poll.options.reduce((acc: number, o: PollOption) => acc + o.voteCount, 0);
+  const selectedOptionId = pollData.userVote?.optionId;
 
   return (
     <div className="page-wrap max-w-4xl mx-auto py-12 content-fade-in">
@@ -288,42 +382,120 @@ export default function PollDetailPage() {
                 ? "विकल्प थप्नुहोस्"
                 : "Add option"}
           </button>
+          <input
+            type="file"
+            accept="image/*"
+            className="ui-input md:col-span-3"
+            onChange={(e) => setNewOptionImage(e.target.files?.[0] || null)}
+          />
         </div>
       </div>
       
       <div className="space-y-4">
         {poll.options.map((opt: PollOption) => {
           const percent = total > 0 ? Math.round((opt.voteCount / total) * 100) : 0;
-          const isSelected = votedPolls[id as string] === opt.id;
+          const isSelected = selectedOptionId === opt.id;
+          const imageSrc = getOptionImageSrc(opt);
 
           return (
-            <div key={opt.id} className="flex items-stretch gap-2">
-              <button
-                disabled={voteMutation.isPending}
-                onClick={() => voteMutation.mutate(opt.id)}
-                className={`poll-detail-vote flex-1 h-16 disabled:opacity-60 disabled:cursor-not-allowed ${isSelected ? 'is-selected' : ''}`}
-              >
-                <div className={`poll-detail-vote-fill ${isSelected ? 'is-selected' : ''}`} style={{ width: `${percent}%` }} />
-                <div className="absolute inset-0 px-6 flex justify-between items-center font-bold">
-                  <span className={isSelected ? 'text-primary' : 'text-on-surface'}>
-                    {lang === "Np" ? opt.optionTextNp : opt.optionTextEn}
-                    {isSelected && " (Voted)"}
-                  </span>
-                  <span className="text-sm font-black">{percent}%</span>
-                </div>
-              </button>
-              <AdminOnly>
+            <div key={opt.id} className="space-y-2">
+              <div className="flex items-stretch gap-2">
                 <button
-                  type="button"
-                  onClick={() => handleDeleteOption(opt.id)}
-                  disabled={deleteOptionMutation.isPending}
-                  className="ui-btn-danger rounded-2xl px-3 text-sm"
-                  aria-label={lang === "Np" ? "विकल्प मेटाउनुहोस्" : "Delete option"}
-                  title={lang === "Np" ? "विकल्प मेटाउनुहोस्" : "Delete option"}
+                  disabled={voteMutation.isPending}
+                  onClick={() => voteMutation.mutate(opt.id)}
+                  className={`poll-detail-vote flex-1 min-h-16 disabled:opacity-60 disabled:cursor-not-allowed ${isSelected ? "is-selected" : ""}`}
                 >
-                  {lang === "Np" ? "मेटाउनुहोस्" : "Delete"}
+                  <div className={`poll-detail-vote-fill ${isSelected ? "is-selected" : ""}`} style={{ width: `${percent}%` }} />
+                  <div className="relative z-10 px-6 py-3 flex justify-between items-center gap-3 font-bold">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {imageSrc && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={imageSrc} alt={lang === "Np" ? opt.optionTextNp : opt.optionTextEn} className="h-10 w-10 rounded-lg object-cover" />
+                      )}
+                      <span className={isSelected ? "text-primary truncate" : "text-on-surface truncate"}>
+                        {lang === "Np" ? opt.optionTextNp : opt.optionTextEn}
+                        {isSelected && " (Voted)"}
+                      </span>
+                    </div>
+                    <span className="text-sm font-black shrink-0">{percent}%</span>
+                  </div>
                 </button>
-              </AdminOnly>
+                <AdminOnly>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleEditOption(opt)}
+                      disabled={updateOptionMutation.isPending}
+                      className="ui-btn-secondary rounded-2xl px-3 text-sm"
+                      aria-label={lang === "Np" ? "विकल्प सम्पादन गर्नुहोस्" : "Edit option"}
+                      title={lang === "Np" ? "विकल्प सम्पादन गर्नुहोस्" : "Edit option"}
+                    >
+                      {lang === "Np" ? "सम्पादन" : "Edit"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteOption(opt.id)}
+                      disabled={deleteOptionMutation.isPending}
+                      className="ui-btn-danger rounded-2xl px-3 text-sm"
+                      aria-label={lang === "Np" ? "विकल्प मेटाउनुहोस्" : "Delete option"}
+                      title={lang === "Np" ? "विकल्प मेटाउनुहोस्" : "Delete option"}
+                    >
+                      {lang === "Np" ? "मेटाउनुहोस्" : "Delete"}
+                    </button>
+                  </div>
+                </AdminOnly>
+              </div>
+
+              {editingOptionId === opt.id && (
+                <div className="form-card">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <input
+                      value={editingOptionNp}
+                      onChange={(e) => setEditingOptionNp(e.target.value)}
+                      placeholder="विकल्प पाठ (नेपाली)"
+                      className="ui-input"
+                    />
+                    <input
+                      value={editingOptionEn}
+                      onChange={(e) => setEditingOptionEn(e.target.value)}
+                      placeholder="Option text (English)"
+                      className="ui-input"
+                    />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="ui-input md:col-span-2"
+                      onChange={(e) => setEditingOptionImage(e.target.files?.[0] || null)}
+                    />
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveOption}
+                      disabled={updateOptionMutation.isPending}
+                      className="ui-btn-primary px-4 py-2 text-sm"
+                    >
+                      {updateOptionMutation.isPending
+                        ? lang === "Np"
+                          ? "सेभ हुँदै..."
+                          : "Saving..."
+                        : lang === "Np"
+                          ? "सेभ गर्नुहोस्"
+                          : "Save"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingOptionId(null);
+                        setEditingOptionImage(null);
+                      }}
+                      className="ui-btn-secondary px-4 py-2 text-sm"
+                    >
+                      {lang === "Np" ? "रद्द गर्नुहोस्" : "Cancel"}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
