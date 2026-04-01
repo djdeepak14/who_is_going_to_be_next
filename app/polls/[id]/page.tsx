@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { useLanguage } from "@/app/context/LanguageContext";
 import { useToast } from "@/app/components/ToastProvider";
@@ -13,6 +13,7 @@ import { PollDetailSkeleton } from "@/app/components/PageSkeletons";
 
 const API_BASE = getApiBaseUrl();
 const POLL_API = `${API_BASE}/poll`;
+const POLL_USER_VOTE_STORAGE_KEY = "vanguard_poll_user_votes";
 
 type PollOption = {
   id: string;
@@ -51,6 +52,7 @@ function getOptionImageSrc(option: PollOption): string | null {
 
 export default function PollDetailPage() {
   const { id } = useParams();
+  const pollId = typeof id === "string" ? id : "";
   const router = useRouter();
   const { getToken } = useAuth();
   const { lang } = useLanguage();
@@ -63,7 +65,15 @@ export default function PollDetailPage() {
   const [editingOptionNp, setEditingOptionNp] = useState("");
   const [editingOptionEn, setEditingOptionEn] = useState("");
   const [editingOptionImage, setEditingOptionImage] = useState<File | null>(null);
-  const [localSelectedOptionId, setLocalSelectedOptionId] = useState<string | null>(null);
+  const [localSelectedOptionId, setLocalSelectedOptionId] = useState<string | null>(() => {
+    if (typeof window === "undefined" || !pollId) return null;
+    try {
+      const history = JSON.parse(localStorage.getItem(POLL_USER_VOTE_STORAGE_KEY) || "{}") as Record<string, string>;
+      return history[pollId] || null;
+    } catch {
+      return null;
+    }
+  });
 
   const { data: pollData, isLoading, isError, error } = useQuery<PollDetailResponse>({
     queryKey: ["poll", id],
@@ -92,6 +102,15 @@ export default function PollDetailPage() {
     },
     onMutate: (optionId) => {
       setLocalSelectedOptionId(optionId);
+      if (pollId) {
+        try {
+          const history = JSON.parse(localStorage.getItem(POLL_USER_VOTE_STORAGE_KEY) || "{}") as Record<string, string>;
+          history[pollId] = optionId;
+          localStorage.setItem(POLL_USER_VOTE_STORAGE_KEY, JSON.stringify(history));
+        } catch {
+          // Ignore parse/write issues and keep in-memory fallback.
+        }
+      }
     },
     onSuccess: (payload) => {
       queryClient.invalidateQueries({ queryKey: ["poll", id] });
@@ -123,6 +142,19 @@ export default function PollDetailPage() {
       });
     },
   });
+
+  useEffect(() => {
+    const serverOptionId = pollData?.userVote?.optionId;
+    if (!serverOptionId || !pollId) return;
+
+    try {
+      const history = JSON.parse(localStorage.getItem(POLL_USER_VOTE_STORAGE_KEY) || "{}") as Record<string, string>;
+      history[pollId] = serverOptionId;
+      localStorage.setItem(POLL_USER_VOTE_STORAGE_KEY, JSON.stringify(history));
+    } catch {
+      // Ignore parse/write issues and continue using server response.
+    }
+  }, [pollData?.userVote?.optionId, pollId]);
 
   const deletePollMutation = useMutation({
     mutationFn: async () => {

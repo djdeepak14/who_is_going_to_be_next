@@ -15,6 +15,7 @@ import { PollsListSkeleton } from "@/app/components/PageSkeletons";
 
 const API_BASE = getApiBaseUrl();
 const POLL_API = `${API_BASE}/poll`;
+const POLL_USER_VOTE_STORAGE_KEY = "vanguard_poll_user_votes";
 
 type PollOption = {
   id: string;
@@ -97,7 +98,14 @@ export default function PollsPage() {
   const { lang } = useLanguage();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
-  const [localUserVotes, setLocalUserVotes] = useState<Record<string, string>>({});
+  const [localUserVotes, setLocalUserVotes] = useState<Record<string, string>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      return JSON.parse(localStorage.getItem(POLL_USER_VOTE_STORAGE_KEY) || "{}");
+    } catch {
+      return {};
+    }
+  });
   // Store new option state per poll
   const [newOptionState, setNewOptionState] = useState<Record<string, { np: string; en: string; show: boolean; image: File | null }>>({});
 
@@ -164,10 +172,14 @@ export default function PollsPage() {
       return (await res.json()) as VoteResponse;
     },
     onSuccess: (payload, variables) => {
-      setLocalUserVotes((prev) => ({
-        ...prev,
-        [variables.pollId]: variables.optionId,
-      }));
+      setLocalUserVotes((prev) => {
+        const next = {
+          ...prev,
+          [variables.pollId]: variables.optionId,
+        };
+        localStorage.setItem(POLL_USER_VOTE_STORAGE_KEY, JSON.stringify(next));
+        return next;
+      });
       queryClient.invalidateQueries({ queryKey: ["polls"] });
       const fallbackTitle =
         payload?.data?.action === "updated"
